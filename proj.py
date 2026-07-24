@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.14"
+__generated_with = "0.17.6"
 app = marimo.App(width="medium")
 
 
@@ -9,178 +9,377 @@ def _():
     import marimo as mo
     import matplotlib.pyplot as plt
     from matplotlib import cm
+    from sklearn.preprocessing import StandardScaler
     import matplotlib.patches as patches
     import numpy as np
+    import pandas as pd
     from sklearn.gaussian_process import GaussianProcessClassifier
-    from sklearn.gaussian_process.kernels import DotProduct, RBF, Matern, ConstantKernel as C
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.gaussian_process.kernels import DotProduct, WhiteKernel, RBF, Matern, ConstantKernel as C
     from scipy.stats import entropy
     from scipy.linalg import solve
+    return (
+        DotProduct,
+        GaussianProcessClassifier,
+        Matern,
+        StandardScaler,
+        WhiteKernel,
+        entropy,
+        mo,
+        np,
+        pd,
+        plt,
+        solve,
+    )
 
-    return C, GaussianProcessClassifier, Matern, entropy, np, plt, solve
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    # ::radix-icons:box:: define search space
+    """)
+    return
 
 
 @app.cell
 def _():
-    # defines box dims (OG heatmap)
-    components = ["surfactant", "salt"]
+    # list of components
+    components = ["[surfactant] (g/L)", "[salt] (g/L)"]
+
+    # maximum concentrations defining the box
     c_max = [20.0, 40.0] # g/L
-    return (c_max,)
+    return c_max, components
 
 
-app._unparsable_cell(
-    r"""
-    def draw_boundary(c_max):
+@app.cell
+def _(components, plt):
+    def draw_box(c_max):
         fig, ax = plt.subplots()
-        plt.xlabel("[" + components[0] + "] (g / L)")
-        plt.ylabel("[" + components[1] + "] (g / L)")
+
+        plt.xlabel(components[0])
+        plt.ylabel(components[1])
+
         ax.set_aspect('equal', 'box')
+
         plt.xlim([0, c_max[0]])
         plt.ylim([0, c_max[1]])
-        c0s = np.linspace(0, c_max[0], 100
-        plt.plot(c0s, phase_boundary(c0s), color="white", label="true phase boundary")
+
         return ax
-    """,
-    name="_"
-)
+    return (draw_box,)
+
+
+@app.cell
+def _(c_max, draw_box):
+    draw_box(c_max)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    # ::lucide:bow-arrow:: experimental design (a ray)
+    """)
+    return
 
 
 @app.cell
 def _(np):
-    #the return statement is what i have been using to put different functions on my phase boundary line. flexible with everything except sine graph. 
-    def phase_boundary(c0):
-         return 20 / (1 + np.exp(0.5*(c0 - 10)))
-
-    return (phase_boundary,)
-
-
-@app.cell
-def _(phase_boundary):
-    def run_expt_point(c):
-        return int(c[1] < phase_boundary(c[0]))
-
-    return (run_expt_point,)
+    # give a ratio := c1 / c0 and the box boundary
+    #   solve for the point on the top or right side of the box
+    #   which is the concentration vector for initializing the dilution experiment
+    def ray_start_c(c1_c0_ratio, c_max):
+        if np.isclose(c1_c0_ratio, 0.0):
+            return np.array([c_max[0], 0.0])
+        
+        t_edge = min(c_max[0] / 1.0, c_max[1] / c1_c0_ratio)
+        return np.array([t_edge, t_edge * c1_c0_ratio])
+    return (ray_start_c,)
 
 
 @app.cell
-def _(np):
-    def ray_edge_point(ratio, c_max):
-        t_edge = min(c_max[0] / 1.0, c_max[1] / ratio)
-        return np.array([t_edge, t_edge * ratio])
-
-    return (ray_edge_point,)
-
-
-@app.cell
-def _(np, ray_edge_point, run_expt_point):
-    def run_expt(ratio, c_max, n_max_halvings=25):
-        c_edge = ray_edge_point(ratio, c_max)
-        t = 1.0
-        prev_t = None
-        for _ in range(n_max_halvings):
-            c = t * c_edge
-            outcome = run_expt_point(c)
-            if outcome == 1:
-                if prev_t is None:
-                    # already dissolved at the most concentrated point in the box
-                    return np.array([c_edge, c]), np.array([0, 1])
-                return np.array([prev_t * c_edge, t * c_edge]), np.array([0, 1])
-            prev_t = t
-            t /= 2.0
-        # never dissolved within n_max_halvings steps
-        return np.array([prev_t * c_edge, t * c_edge]), np.array([0, 0])
-
-    return (run_expt,)
-
-
-@app.cell
-def _(c_max, np, run_expt):
-    #rays and ratios
-    n_rays = 8
-    angles_deg = np.linspace(10, 80, n_rays)  
-    ratios = np.tan(np.deg2rad(angles_deg))
-
-    #run one dilution series experiment per ray
-    _c_expts_list, _dissolved_list = [], []
-    for _r in ratios:
-        _pts, _labels = run_expt(_r, c_max)
-        _c_expts_list.append(_pts)
-        _dissolved_list.append(_labels)
-
-    c_expts = np.vstack(_c_expts_list)
-    dissolved = np.concatenate(_dissolved_list)
-    data = (c_expts, dissolved)
-    return c_expts, data, dissolved, ratios
-
-
-@app.cell
-def _(c_max, np):
-    #ray cosmetics
-    def draw_ray(ax, ratio):
+def _(c_max, np, ray_start_c):
+    # draw the ray that defines an expt design
+    def draw_ray(ax, c1_c0_ratio, draw_start_point=True):
+        # draw ray
         c0s = np.linspace(0, c_max[0], 10)
-        ax.plot(c0s, ratio * c0s, color="gray", zorder=1, linewidth=1)
+        ax.plot(c0s, c1_c0_ratio * c0s, color="gray", zorder=1, linewidth=1, linestyle="--")
 
+        # dray starting point
+        if draw_start_point:
+            c_end = ray_start_c(c1_c0_ratio, c_max)
+            ax.scatter(c_end[0], c_end[1], color="gray", clip_on=False)
     return (draw_ray,)
 
 
 @app.cell
-def _(c_expts, c_max, dissolved, draw_boundary, draw_ray, plt, ratios, y_prob):
-    #graph cosmetics/inputting the ratio function
-    _ax = draw_boundary(c_max)
-    for _ratio in ratios:
-        draw_ray(_ax, _ratio)
-
-    for _outcome in [0, 1]:
-        _label = "dissolved" if _outcome == 1 else "precipitate"
-        plt.scatter(c_expts[dissolved == _outcome, 0], c_expts[dissolved == _outcome, 1], label=_label, zorder=5)
-    plt.legend(bbox_to_anchor=(1.1, 1))
-    cax = plt.imshow(
-        y_prob, 
-        cmap=plt.cm.PuOr_r, 
-        alpha=0.8, 
-        extent=(0, c_max[0], 0, c_max[1]),
-        origin='lower',  
-        vmin=0.0,        
-        vmax=1.0,
-        zorder=1
-    )
-    norm = plt.matplotlib.colors.Normalize(vmin=0.0, vmax=1.0)
-
-    cb = plt.colorbar(cax, ticks=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0], norm=norm)
-    cb.set_label(r"Prob of dissolving")
-    plt.clim(0, 1)
+def _(c_max, draw_box, draw_ray, draw_toy_boundary, plt):
+    _ax = draw_box(c_max)
+    _c1_c0_ratio = 3.0
+    draw_toy_boundary(_ax)
+    draw_ray(_ax, _c1_c0_ratio)
+    plt.show()
+    return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    # ::material-icon-theme:test-js:: toy phase boundary and data for testing
+    """)
+    return
+
+
+@app.cell
+def _(np):
+    # input: c0. output: c1 at phase boundary.
+    #   so (c0, c1) is point on the phase boundary
+    def toy_phase_boundary(c0):
+         return 20 / (1 + np.exp(0.5 * (c0 - 10))) - 0.5 # made-up
+    return (toy_phase_boundary,)
+
+
+@app.cell
+def _(c_max, np, toy_phase_boundary):
+    def draw_toy_boundary(ax, color="black"):
+        c0s = np.linspace(0, c_max[0], 100)
+        c1s = toy_phase_boundary(c0s)
+
+        ax.plot(c0s, c1s, color=color, label="toy phase boundary")
+    return (draw_toy_boundary,)
+
+
+@app.cell
+def _(c_max, draw_box, draw_toy_boundary, plt):
+    _ax = draw_box(c_max)
+    draw_toy_boundary(_ax)
     plt.show()
     return
 
 
 @app.cell
-def _(c_max, gp, np):
-    #lay points
-    res = 25
-    c1, c2 = np.meshgrid(np.linspace(0, c_max[0], res), np.linspace(0, c_max[1], res))
-
-    #reshape for input to GP
-    xx = np.vstack([c1.reshape(c1.size), c2.reshape(c2.size)]).T
-
-    #use GP to predict probability of dissolving, and reshape for heatmap plotting
-    y_prob = gp.predict_proba(xx)[:, 1]
-    y_prob = y_prob.reshape((res, res)) 
-    return res, xx, y_prob
+def _(toy_phase_boundary):
+    # simulates experiment at input concentration vector c
+    #  returns true or false.
+    #   true = dissolved
+    #   false = precipitated
+    def simulate_expt(c):
+        return int(c[1] < toy_phase_boundary(c[0]))
+    return (simulate_expt,)
 
 
 @app.cell
-def _(C, GaussianProcessClassifier, Matern, c_expts, dissolved):
-    #le kernel
-    kernel = C(1.0, constant_value_bounds=(0.1, 100.0)) * Matern(length_scale=[1.0, 1.0], length_scale_bounds=(1.0, 20.0), nu=2.5)
+def _(np, ray_start_c, simulate_expt):
+    # returns the two concentration vectors bracketing the phase boundary
+    def run_expt(c1_c0_ratio, c_max, n_res=35):
+        c_init = ray_start_c(c1_c0_ratio, c_max)
 
-    gp = GaussianProcessClassifier(kernel=kernel)
+        # scalars to multiply vector c_init
+        ts = np.sort(np.random.random(n_res))[::-1] # start at concentrated solution
 
-    #set to none to try and make graph look better
-    optimizer=None
+        crosssed_phase_boundary = True
+        for i, t in enumerate(ts):
+            # the concentration for this experiment
+            c = t * c_init
 
-    gp.fit(c_expts, dissolved)
-    return (gp,)
+            # do the experiment
+            outcome = simulate_expt(c) # True if dissolved; False if precipitated
+
+            # if dissolved, we crossed the phase boundary
+            if outcome:
+                crosssed_phase_boundary = True
+                return ts[i-1] * c_init, c
+    return (run_expt,)
+
+
+@app.cell
+def _(c_max, run_expt):
+    run_expt(1/3, c_max, n_res=25)
+    return
+
+
+@app.cell
+def _(components, pd, run_expt):
+    def run_expts(c1_c0_ratios, c_max, n_res=50):
+        data_rows = []
+        for c1_c0_ratio in c1_c0_ratios:
+            # simulate experiment and get the two concentration vectors bracketing phase boundary
+            c_prec, c_diss = run_expt(c1_c0_ratio, c_max)
+
+            # make note of dissovled point
+            data_rows.append({"dissolved": True, components[0]: c_diss[0], components[1]: c_diss[1]})
+
+            # make note of preceding preciptated point
+            data_rows.append({"dissolved": False, components[0]: c_prec[0], components[1]: c_prec[1]})
+        
+        data = pd.DataFrame(data_rows)
+    
+        return data
+    return (run_expts,)
+
+
+@app.cell
+def _(c_max, np, run_expts):
+    # specify an experimental design
+    n_rays = 8
+    _thetas = np.linspace(0, np.pi / 2, n_rays) 
+    c1_c0_ratios = np.tan(_thetas)
+
+    toy_data = run_expts(c1_c0_ratios, c_max)
+    toy_data
+    return c1_c0_ratios, n_rays, toy_data
+
+
+@app.cell
+def _(
+    c1_c0_ratios,
+    c_max,
+    components,
+    draw_box,
+    draw_ray,
+    draw_toy_boundary,
+    n_rays,
+    plt,
+    toy_data,
+):
+    _ax = draw_box(c_max)
+    draw_toy_boundary(_ax)
+
+    for _r in range(n_rays):
+        draw_ray(_ax, c1_c0_ratios[_r])
+
+    plt.scatter(
+        toy_data.loc[toy_data["dissolved"].values, components[0]], 
+        toy_data.loc[toy_data["dissolved"].values, components[1]], 
+        label="dissolved", zorder=5, clip_on=False
+    )
+    plt.scatter(
+        toy_data.loc[~toy_data["dissolved"].values, components[0]], 
+        toy_data.loc[~toy_data["dissolved"].values, components[1]], 
+        label="precipitate", zorder=5, clip_on=False
+    )
+
+    plt.show()
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    # ::devicon:dropwizard:: train GP model
+    """)
+    return
+
+
+@app.cell
+def _(toy_data):
+    toy_data
+    return
+
+
+@app.cell
+def _(
+    DotProduct,
+    GaussianProcessClassifier,
+    Matern,
+    StandardScaler,
+    WhiteKernel,
+    components,
+):
+    def fit_surrogate_model(data):
+        kernel = DotProduct(sigma_0=1.0, sigma_0_bounds=(1e-2, 1e2)) + Matern(
+            length_scale=[1.0, 1.0], length_scale_bounds=(1.0, 10.0), nu=2.5
+        ) + WhiteKernel(noise_level=1e-2, noise_level_bounds=(1e-5, 1e1))
+    
+        gp = GaussianProcessClassifier(kernel=kernel, n_restarts_optimizer=25)
+
+        X = data[components].values
+        y = data["dissolved"].values
+
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+    
+        gp.fit(X_scaled, y)
+
+        return gp, scaler
+    return (fit_surrogate_model,)
+
+
+@app.cell
+def _(fit_surrogate_model, toy_data):
+    toy_gp, toy_scaler = fit_surrogate_model(toy_data)
+    return toy_gp, toy_scaler
+
+
+@app.function
+#posterior sampling 
+def latent_posterior_full(base, Xstar, solve):
+    K_star = base.kernel_(base.X_train_, Xstar)            # (n_train, n_test)
+    latent_mean = K_star.T.dot(base.y_train_ - base.pi_)   # (n_test,)
+    v = solve(base.L_, base.W_sr_[:, None] * K_star)       # (n_train, n_test)
+    K_ss = base.kernel_(Xstar, Xstar)                      # (n_test, n_test)
+    cov = K_ss - v.T @ v
+    return latent_mean, cov
+
+
+@app.cell
+def _(np, plt, solve):
+    def viz_surrogate_model(ax, gp, scaler, c_max, mode="heatmap", res=50, seed=97330, n_samples=20):
+        # make grid of concentration vectors
+        c1, c2 = np.meshgrid(np.linspace(0, c_max[0], res), np.linspace(0, c_max[1], res))
+        C = np.vstack([c1.reshape(c1.size), c2.reshape(c2.size)]).T
+        C_scaled = scaler.transform(C)
+    
+        if mode == "heatmap":
+            # compute prob of class at each grid point
+            y_prob = gp.predict_proba(C_scaled)[:, 1].reshape((res, res))
+        
+            cax = ax.imshow(
+                y_prob, cmap=plt.cm.PuOr_r, alpha=0.8,
+                extent=(0, c_max[0], 0, c_max[1]), 
+                origin='lower',
+                vmin=0.0, vmax=1.0, zorder=0
+            )
+            cb = plt.colorbar(cax, ax=ax, ticks=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
+            cb.set_label("Prob[dissolve]")
+        elif mode == "samples":
+            mean_f, cov_f = latent_posterior_full(gp.base_estimator_, C_scaled, solve)
+            cov_f += 1e-6 * np.eye(cov_f.shape[0])
+            rng = np.random.default_rng(seed)
+            f_samples = rng.multivariate_normal(mean_f, cov_f, size=n_samples)
+            f_samples_grid = f_samples.reshape(n_samples, res, res)
+            for i in range(n_samples):
+                ax.contour(c1, c2, f_samples_grid[i], levels=[0.5],
+                           colors="tab:pink", alpha=0.15, linewidths=1.5)
+    return (viz_surrogate_model,)
+
+
+@app.cell
+def _(
+    c_max,
+    components,
+    draw_box,
+    draw_toy_boundary,
+    plt,
+    toy_data,
+    toy_gp,
+    toy_scaler,
+    viz_surrogate_model,
+):
+    _ax = draw_box(c_max)
+    draw_toy_boundary(_ax)
+    viz_surrogate_model(_ax, toy_gp, toy_scaler, c_max, mode="samples", seed=3)
+    plt.scatter(
+        toy_data.loc[toy_data["dissolved"].values, components[0]], 
+        toy_data.loc[toy_data["dissolved"].values, components[1]], 
+        label="dissolved", zorder=5, clip_on=False
+    )
+    plt.scatter(
+        toy_data.loc[~toy_data["dissolved"].values, components[0]], 
+        toy_data.loc[~toy_data["dissolved"].values, components[1]], 
+        label="precipitate", zorder=5, clip_on=False
+    )
+    plt.show()
+    return
 
 
 @app.cell
@@ -212,17 +411,6 @@ def _(c_max, entropy, gp, np, plt, ratios, ray_edge_point):
     _fig.tight_layout()
     _fig
     return
-
-
-@app.function
-#posterior sampling 
-def latent_posterior_full(base, Xstar, solve):
-    K_star = base.kernel_(base.X_train_, Xstar)           #(n_train, n_test)
-    latent_mean = K_star.T.dot(base.y_train_ - base.pi_)   #(n_test,)
-    v = solve(base.L_, base.W_sr_[:, None] * K_star)       #(n_train, n_test)
-    K_ss = base.kernel_(Xstar, Xstar)                      #(n_test, n_test)
-    cov = K_ss - v.T @ v
-    return latent_mean, cov
 
 
 @app.cell
@@ -279,7 +467,6 @@ def _(draw_boundary, np, plt, solve):
 
         ax.legend(bbox_to_anchor=(1.1, 1))
         return ax
-
     return (viz,)
 
 
@@ -298,7 +485,7 @@ def _(np, ray_edge_point):
     #score theta graph
 
     def score_theta(gp, c_max, n_theta=200, n_s=200):
-    
+
         trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz 
 
         thetas = np.linspace(0, np.pi / 2, n_theta)
@@ -331,7 +518,6 @@ def _(np, ray_edge_point):
             scores[i] = trapz(std, s_vals) / L           
 
         return thetas, scores
-
     return (score_theta,)
 
 
