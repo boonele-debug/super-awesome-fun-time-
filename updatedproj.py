@@ -527,7 +527,7 @@ def _(mo):
 
 
 @app.cell
-def _(components, np, plt):
+def _(c_max, components, np, plt, ray_start_c):
     def choose_theta(gpr, n_theta=100):
         # candidate theta's
         thetas = np.linspace(0, np.pi / 2, n_theta)
@@ -548,6 +548,11 @@ def _(components, np, plt):
     
         best_theta = thetas[np.argmax(scores)]
         best_c1_ovr_c0_ratio = np.tan(best_theta)
+        c0_start = ray_start_c(best_c1_ovr_c0_ratio, c_max)
+        print("optimal design: ")
+        for c, component in enumerate(components):
+            print(f"{component} : {c0_start[c]:.2f}")
+        
         ax.axvline(
             best_theta, color="black", ls="--", lw=1,
             label=f"next design:\n$\\theta^*$={best_theta:.1f} rad\n{components[1].split()[0]}: {components[0].split()[0]}: {best_c1_ovr_c0_ratio:.1f}"
@@ -569,7 +574,7 @@ def _(components, np, plt):
         fig.tight_layout()
         plt.show()
 
-        return best_c1_ovr_c0_ratio
+        return best_c1_ovr_c0_ratio, c0_start
     return (choose_theta,)
 
 
