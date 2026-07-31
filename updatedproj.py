@@ -212,8 +212,9 @@ def _(components, pd, run_expt):
 @app.cell
 def _(c_max, np, run_expts):
     # specify an experimental design
-    n_rays = 4
-    _thetas = np.linspace(0, np.pi / 2, n_rays) 
+    _thetas = np.linspace(0, np.pi / 2, 4) 
+    _thetas = np.array([0, np.pi/2, np.pi/8, np.pi/3, np.pi/6])
+    n_rays = np.size(_thetas)
     c1_c0_ratios = np.tan(_thetas)
 
     toy_data = run_expts(c1_c0_ratios, c_max)
@@ -331,28 +332,31 @@ def _(build_polar_data, c_max, toy_data):
 
 
 @app.cell
-def _(C, GaussianProcessRegressor, Matern, polar_data):
+def _(C, GaussianProcessRegressor, Matern, np, polar_data):
     kernel = C(1.0, constant_value_bounds=(0.1, 100.0)) * Matern(
-        length_scale=0.5, length_scale_bounds="fixed", nu=2.5
+        length_scale=0.5, length_scale_bounds=[np.pi/10, np.pi], nu=2.5
     )
 
     # Initialize GPR without normalize_y to preserve alpha scaling
     gpr = GaussianProcessRegressor(
         kernel=kernel,
         alpha=polar_data["alpha"].values,
-        normalize_y=False,
+        normalize_y=True,
         n_restarts_optimizer=10
     )
 
     # Fit GP model w/ theta and r values from data above
     gpr.fit(polar_data[["theta"]].values, polar_data["r"].values)
+
+    print("Fitted kernel:", gpr.kernel_)
+    print("Log-marginal-likelihood:", gpr.log_marginal_likelihood(gpr.kernel_.theta))
     return (gpr,)
 
 
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    # ::lucide:eye:: visualize the surrogate model
+    ## ::lucide:eye:: visualize the surrogate model
     """)
     return
 
@@ -482,7 +486,6 @@ def _(np, plt):
             edgecolor="black", zorder=10
         )
         plt.xlim([0, np.pi/2])
-        plt.ylim(ymin=0)
 
         theta_grid = np.linspace(0, np.pi / 2, 150)
 
@@ -503,6 +506,7 @@ def _(np, plt):
 
         ax.set_xticks([0, np.pi/8, np.pi/4, 3*np.pi/8, np.pi/2])
         ax.set_xticklabels([r"$0$", r"$\pi/8$", r"$\pi/4$", r"$3\pi/8$", r"$\pi/2$"])
+        plt.ylim(ymin=0)
     
         plt.show()
     return (viz_surrogate_model_polar,)
